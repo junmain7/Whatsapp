@@ -1,0 +1,15 @@
+{
+  "name": "whatsapp-bot",
+  "version": "1.0.0",
+  "description": "A WhatsApp bot with Firebase persistence and Gemini API integration.",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "firebase": "^10.12.3",
+    "qrcode": "^1.5.3",
+    "whatsapp-web.js": "^1.23.0"
+  }
+}
