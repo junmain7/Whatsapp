@@ -341,6 +341,7 @@ function initializeWhatsappClient() {
         const botOwnId = client.info?.wid?._serialized || null; // सुरक्षित एक्सेस के लिए ऑप्शनल चेनिंग
         if (botOwnId) {
             try {
+                // मालिक को सूचित करें कि बॉट तैयार है
                 await client.sendMessage(botOwnId, 'बॉट सफलतापूर्वक कनेक्ट हो गया है और अब आपके पर्सनल असिस्टेंट के रूप में कार्य करने के लिए तैयार है!');
                 console.log(`कनेक्शन कन्फर्मेशन मैसेज ${botOwnId} को भेजा गया।`);
             } catch (error) {
@@ -415,9 +416,8 @@ function initializeWhatsappClient() {
             return;
         }
 
-        // 2. मालिक द्वारा भेजे गए स्थिति परिवर्तन कमांड को हैंडल करें
-        // या शेड्यूल मैसेज कमांड को हैंडल करें
-        if (botOwnId && senderId === botOwnId) { // केवल तभी जब मैसेज खुद मालिक से आया हो
+        // 2. यदि मैसेज मालिक से आया है (बॉट का अपना नंबर)
+        if (botOwnId && senderId === botOwnId) {
             const lowerCaseMessage = messageBody.toLowerCase().trim();
 
             // शेड्यूल मैसेज कमांड को हैंडल करें
@@ -426,7 +426,6 @@ function initializeWhatsappClient() {
                 if (scheduleDetails) {
                     const success = await scheduleMessageInFirestore(scheduleDetails);
                     if (success) {
-                        // शेड्यूल की पुष्टि के लिए मैसेज भेजें
                         await client.sendMessage(senderId, `मैसेज "${scheduleDetails.message}" को ${scheduleDetails.recipient} पर ${new Date(scheduleDetails.scheduledTime).toLocaleString()} पर भेजने के लिए शेड्यूल किया गया है।`);
                     } else {
                         await client.sendMessage(senderId, 'शेड्यूल किया गया मैसेज सेव करने में त्रुटि हुई।');
@@ -434,15 +433,16 @@ function initializeWhatsappClient() {
                 } else {
                     await client.sendMessage(senderId, 'क्षमा करें, आपके शेड्यूल कमांड का फॉर्मेट गलत है। कृपया "send [मैसेज] to [नंबर] at [समय]" का उपयोग करें। उदाहरण: "send Hi to 9365374458 at 12:00pm"');
                 }
-                return; // कमांड हैंडल किया गया, आगे प्रोसेस न करें
+                return; // मालिक के शेड्यूल कमांड को हैंडल किया गया
             }
 
             // मालिक की स्थिति और पर्सनल असिस्टेंट मोड कमांड को हैंडल करें
+            // इन कमांड्स पर हमेशा मालिक को जवाब दें
             if (lowerCaseMessage === 'online true') {
                 if (!isOwnerOnline) {
                     isOwnerOnline = true;
                     await saveBotConfigToFirestore();
-                    await client.sendMessage(senderId, 'आपकी स्थिति अब: ऑनलाइन। बॉट अब अन्य यूज़र्स को जवाब नहीं देगा।');
+                    await client.sendMessage(senderId, 'आपकी स्थिति अब: ऑनलाइन। बॉट अन्य यूज़र्स को जवाब नहीं देगा।');
                     console.log("मालिक ने अपनी स्थिति ऑनलाइन पर सेट की।");
                 } else {
                     await client.sendMessage(senderId, 'आप पहले से ही ऑनलाइन हैं।');
@@ -452,7 +452,8 @@ function initializeWhatsappClient() {
                 if (isOwnerOnline) {
                     isOwnerOnline = false;
                     await saveBotConfigToFirestore();
-                    await client.sendMessage(senderId, 'आपकी स्थिति अब: ऑफ़लाइन। बॉट अब अन्य यूज़र्स को जवाब देगा।');
+                    // मालिक को स्पष्ट रूप से बताएं कि बॉट अब अन्य यूज़र्स को जवाब नहीं देगा।
+                    await client.sendMessage(senderId, 'आपकी स्थिति अब: ऑफ़लाइन। बॉट अब किसी भी यूज़र को जवाब नहीं देगा, सिवाय आपके निर्देशों का पालन करने और शेड्यूल किए गए मैसेजेस भेजने के।');
                     console.log("मालिक ने अपनी स्थिति ऑफलाइन पर सेट की।");
                 } else {
                     await client.sendMessage(senderId, 'आप पहले से ही ऑफ़लाइन हैं।');
@@ -480,21 +481,22 @@ function initializeWhatsappClient() {
                 return;
             }
 
+            // यदि मालिक का मैसेज है और पर्सनल असिस्टेंट मोड चालू है, तो Gemini API से जवाब दें
             if (isPersonalAssistantMode) {
                 console.log('मालिक का मैसेज, पर्सनल असिस्टेंट मोड चालू है, बॉट जवाब देगा।');
                 await handleBotResponse(msg);
                 return;
             } else {
+                // यदि मालिक का सामान्य मैसेज है और पर्सनल असिस्टेंट मोड बंद है, तो कोई जवाब न दें
+                console.log('मालिक का मैसेज, पर्सनल असिस्टेंट मोड बंद है, बॉट जवाब नहीं देगा (केवल कमांड और शेड्यूल)।');
                 return;
             }
         }
 
-        // यदि मालिक ऑनलाइन नहीं है, तो बॉट अन्य यूज़र्स को जवाब देगा
-        if (!isOwnerOnline) {
-            await handleBotResponse(msg);
-        } else {
-            console.log('मालिक ऑनलाइन है, बॉट अन्य यूज़र्स को जवाब नहीं देगा।');
-        }
+        // 3. यदि मैसेज मालिक से नहीं आया है (यानी किसी अन्य उपयोगकर्ता से है)
+        // नई आवश्यकता के अनुसार, बॉट किसी अन्य उपयोगकर्ता को सीधे जवाब नहीं देगा।
+        console.log(`मैसेज मालिक से नहीं आया है (${senderId}), बॉट सीधे जवाब नहीं देगा।`);
+        return; // किसी अन्य उपयोगकर्ता से आए मैसेज को अनदेखा करें
     });
 
     client.initialize(); // क्लाइंट को यहां इनिशियलाइज़ करें
@@ -654,7 +656,7 @@ app.get('/', async (req, res) => {
                     </div>
 
                     <p class="text-xs text-gray-500 mt-4">यह आपकी स्थिति और सेशन को Firestore में सहेजेगा ताकि यह स्थायी रहे।</p>
-                    <p class="text-xs text-gray-500 mt-2">नोट: बॉट अन्य यूज़र्स को तभी जवाब देगा जब आपकी मालिक की स्थिति 'ऑफ़लाइन' हो।</p>
+                    <p class="text-xs text-gray-500 mt-2">नोट: बॉट अन्य यूज़र्स को जवाब नहीं देगा। यह केवल आपके निर्देशों का पालन करेगा और शेड्यूल किए गए मैसेजेस भेजेगा।</p>
                     <p class="text-xs text-gray-500 mt-2">आप खुद को 'Online true', 'Online false', 'Assistant on', 'Assistant off', या 'send [मैसेज] to [नंबर] at [समय]' मैसेज भेजकर भी स्थिति बदल सकते हैं।</p>
                 </div>
             </body>
