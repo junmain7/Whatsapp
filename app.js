@@ -1,8 +1,7 @@
 // app.js
 
 // आवश्यक लाइब्रेरी आयात करें
-// LocalAuth की जगह अब NoAuth का उपयोग किया जाएगा
-const { Client } = require('whatsapp-web.js'); 
+const { Client } = require('whatsapp-web.js'); // LocalAuth अब इस्तेमाल नहीं होगा
 const qrcode = require('qrcode'); // QR कोड जेनरेट करने के लिए
 const express = require('express'); // एक वेब सर्वर बनाने के लिए
 // Firebase मॉड्यूल को Firestore संचालन के लिए अपडेट किया गया है
@@ -14,7 +13,7 @@ const { getAuth, signInAnonymously, signInWithCustomToken } = require('firebase/
 const app = express();
 const port = process.env.PORT || 3000; // Render पोर्ट को ऑटोमेटिकली सेट करता है
 
-// JSON बॉडी को पार्स करने के यो लिए मिडलवेयर (फॉर्म डेटा के लिए)
+// JSON बॉडी को पार्स करने के लिए मिडलवेयर (फॉर्म डेटा के लिए)
 app.use(express.urlencoded({ extended: true }));
 
 // Firebase कॉन्फ़िग और ऐप ID को Render पर्यावरण चर से प्राप्त करें
@@ -122,7 +121,7 @@ async function saveBotConfigToFirestore() {
         const sessionToSave = (typeof savedSession === 'object' && savedSession !== null)
                                ? JSON.stringify(savedSession)
                                : null;
-        console.log("Saving session to Firestore. Session exists:", !!savedSession); // <-- नया डीबग लॉग
+        console.log("Saving session to Firestore. Session exists:", !!savedSession); // <-- डीबग लॉग
         await setDoc(configDocRef, {
             isOwnerOnline,
             isPersonalAssistantMode,
@@ -336,7 +335,7 @@ function initializeWhatsappClient() {
         console.log('सेव्ड सेशन के साथ क्लाइंट इनिशियलाइज़ करने का प्रयास कर रहे हैं...');
     } else {
         console.log('कोई सेव्ड सेशन नहीं मिला, QR कोड के लिए क्लाइंट इनिशियलाइज़ करेंगे...');
-        // NoAuth की आवश्यकता नहीं है, यदि session ऑब्जेक्ट प्रदान नहीं किया जाता है तो लाइब्रेरी स्वचालित रूप से QR मोड में वापस आ जाती है
+        // यदि session ऑब्जेक्ट प्रदान नहीं किया जाता है तो लाइब्रेरी स्वचालित रूप से QR मोड में वापस आ जाती है
     }
 
     client = new Client(clientOptions);
