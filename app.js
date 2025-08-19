@@ -349,7 +349,9 @@ function initializeWhatsappClient() {
     client.on('ready', async () => {
         isClientReady = true;
         console.log('WhatsApp क्लाइंट तैयार है! बॉट अब काम कर रहा है।');
-        // client.info मौजूद है या नहीं, इसकी सुरक्षित जाँच करें
+        // client.info के पूरी तरह से पॉप्युलेट होने के लिए थोड़ा इंतजार करें (रेस कंडीशन से बचने के लिए)
+        await new Promise(resolve => setTimeout(resolve, 1000)); // 1 सेकंड का विलंब
+
         const botOwnId = client.info?.wid?._serialized || null; // सुरक्षित एक्सेस के लिए ऑप्शनल चेनिंग
         if (botOwnId) {
             try {
@@ -360,7 +362,7 @@ function initializeWhatsappClient() {
                 console.error('कनेक्शन कन्फर्मेशन मैसेज भेजने में त्रुटि:', error);
             }
         } else {
-            console.warn('client.info.wid उपलब्ध नहीं है जब क्लाइंट तैयार है।');
+            console.warn('client.info.wid उपलब्ध नहीं है जब क्लाइंट तैयार है। कुछ WhatsApp ID-आधारित संचार विफल हो सकता है।');
         }
 
         // बॉट तैयार होने पर शेड्यूलर शुरू करें
@@ -375,20 +377,11 @@ function initializeWhatsappClient() {
     client.on('authenticated', async (session) => {
         console.log('WhatsApp क्लाइंट प्रमाणित हुआ और सेशन प्राप्त हुआ!');
         savedSession = session; // नए/मान्य सेशन ऑब्जेक्ट को स्टोर करें
+        console.log("Debug: savedSession after authentication:", savedSession ? "exists" : "null"); // <-- नया डीबग लॉग
         qrCodeData = 'WhatsApp क्लाइंट प्रमाणित है और ऑनलाइन है!'; // वेब पेज पर स्थिति अपडेट करें
         await saveBotConfigToFirestore(); // सेशन ऑब्जेक्ट और अपडेटेड QR मैसेज को Firestore में सहेजें
 
-        // client.info मौजूद है या नहीं, इसकी सुरक्षित जाँच करें
-        const botOwnId = client.info?.wid?._serialized || null; // सुरक्षित एक्सेस के लिए ऑप्शनल चेनिंग
-        if (botOwnId) {
-            try {
-                await client.sendMessage(botOwnId, 'आपका WhatsApp सेशन अब सेव हो गया है! अब आपको बार-बार QR स्कैन करने की ज़रूरत नहीं पड़ेगी (जब तक आप मैन्युअल रूप से लॉगआउट न करें या सेशन अमान्य न हो जाए)।');
-            } catch (error) {
-                console.error('सेशन सेव्ड कन्फर्मेशन मैसेज भेजने में त्रुटि:', error);
-            }
-        } else {
-            console.warn('client.info.wid उपलब्ध नहीं है जब क्लाइंट प्रमाणित है।');
-        }
+        // 'authenticated' पर मैसेज भेजने को हटा दिया गया है, अब यह 'ready' पर होगा
     });
 
     client.on('auth_failure', async (msg) => {
