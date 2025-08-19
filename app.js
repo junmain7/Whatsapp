@@ -17,7 +17,19 @@ const port = process.env.PORT || 3000; // Render पोर्ट को ऑट�
 app.use(express.urlencoded({ extended: true }));
 
 // Firebase कॉन्फ़िग और ऐप ID को Render पर्यावरण चर से प्राप्त करें
-const firebaseConfig = process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : {};
+const firebaseConfigRaw = process.env.FIREBASE_CONFIG; // Raw string को पढ़ें
+let firebaseConfig = {};
+try {
+    if (firebaseConfigRaw) {
+        firebaseConfig = JSON.parse(firebaseConfigRaw);
+    }
+} catch (e) {
+    console.error("Error parsing FIREBASE_CONFIG environment variable:", e);
+    console.log("Raw FIREBASE_CONFIG string:", firebaseConfigRaw); // Raw string को लॉग करें
+}
+
+console.log("Parsed firebaseConfig object:", firebaseConfig); // Parsed object को लॉग करें
+
 const appId = process.env.__APP_ID || 'default-app-id'; // '__APP_ID' Render द्वारा प्रदान किया जाता है
 const initialAuthToken = process.env.FIREBASE_AUTH_TOKEN || null; // '__INITIAL_AUTH_TOKEN' Render द्वारा प्रदान किया जाता है
 
@@ -360,7 +372,6 @@ function initializeWhatsappClient() {
         console.log("शेड्यूल किए गए मैसेज भेजने के लिए शेड्यूलर शुरू किया गया।");
     });
 
-    // 'authenticated' इवेंट पर सेशन ऑब्जेक्ट को कैप्चर और सेव करें
     client.on('authenticated', async (session) => {
         console.log('WhatsApp क्लाइंट प्रमाणित हुआ और सेशन प्राप्त हुआ!');
         savedSession = session; // नए/मान्य सेशन ऑब्जेक्ट को स्टोर करें
@@ -453,7 +464,7 @@ function initializeWhatsappClient() {
                     isOwnerOnline = false;
                     await saveBotConfigToFirestore();
                     // मालिक को स्पष्ट रूप से बताएं कि बॉट अब अन्य यूज़र्स को जवाब नहीं देगा।
-                    await client.sendMessage(senderId, 'आपकी स्थिति अब: ऑफ़लाइन। बॉट अब किसी भी यूज़र को जवाब नहीं देगा, सिवाय आपके निर्देशों का पालन करने और शेड्यूल किए गए मैसेजेस भेजने के।');
+                    await client.sendMessage(senderId, 'आपकी स्थिति अब: ऑफ़लाइन। बॉट अब किसी भी यूज़र को जवाब नहीं देगा, सिवाय आपके निर्देशों का पालन करने और शेड्यूल किए गए मैसेजेस भेजने के के।');
                     console.log("मालिक ने अपनी स्थिति ऑफलाइन पर सेट की।");
                 } else {
                     await client.sendMessage(senderId, 'आप पहले से ही ऑफ़लाइन हैं।');
