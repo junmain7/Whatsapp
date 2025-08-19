@@ -1,7 +1,8 @@
 // app.js
 
 // आवश्यक लाइब्रेरी आयात करें
-const { Client, LocalAuth } = require('whatsapp-web.js');
+// LocalAuth की जगह अब NoAuth का उपयोग किया जाएगा
+const { Client } = require('whatsapp-web.js'); 
 const qrcode = require('qrcode'); // QR कोड जेनरेट करने के लिए
 const express = require('express'); // एक वेब सर्वर बनाने के लिए
 // Firebase मॉड्यूल को Firestore संचालन के लिए अपडेट किया गया है
@@ -13,7 +14,7 @@ const { getAuth, signInAnonymously, signInWithCustomToken } = require('firebase/
 const app = express();
 const port = process.env.PORT || 3000; // Render पोर्ट को ऑटोमेटिकली सेट करता है
 
-// JSON बॉडी को पार्स करने के लिए मिडलवेयर (फॉर्म डेटा के लिए)
+// JSON बॉडी को पार्स करने के यो लिए मिडलवेयर (फॉर्म डेटा के लिए)
 app.use(express.urlencoded({ extended: true }));
 
 // Firebase कॉन्फ़िग और ऐप ID को Render पर्यावरण चर से प्राप्त करें
@@ -121,7 +122,7 @@ async function saveBotConfigToFirestore() {
         const sessionToSave = (typeof savedSession === 'object' && savedSession !== null)
                                ? JSON.stringify(savedSession)
                                : null;
-
+        console.log("Saving session to Firestore. Session exists:", !!savedSession); // <-- नया डीबग लॉग
         await setDoc(configDocRef, {
             isOwnerOnline,
             isPersonalAssistantMode,
@@ -329,12 +330,13 @@ function initializeWhatsappClient() {
     };
 
     // यदि कोई सेव्ड सेशन है, तो उसे उपयोग करने का प्रयास करें
+    // LocalAuth की जगह अब सीधे session ऑब्जेक्ट को पास करेंगे
     if (savedSession) {
         clientOptions.session = savedSession;
         console.log('सेव्ड सेशन के साथ क्लाइंट इनिशियलाइज़ करने का प्रयास कर रहे हैं...');
     } else {
         console.log('कोई सेव्ड सेशन नहीं मिला, QR कोड के लिए क्लाइंट इनिशियलाइज़ करेंगे...');
-        clientOptions.authStrategy = new LocalAuth();
+        // NoAuth की आवश्यकता नहीं है, यदि session ऑब्जेक्ट प्रदान नहीं किया जाता है तो लाइब्रेरी स्वचालित रूप से QR मोड में वापस आ जाती है
     }
 
     client = new Client(clientOptions);
@@ -376,12 +378,17 @@ function initializeWhatsappClient() {
 
     client.on('authenticated', async (session) => {
         console.log('WhatsApp क्लाइंट प्रमाणित हुआ और सेशन प्राप्त हुआ!');
-        savedSession = session; // नए/मान्य सेशन ऑब्जेक्ट को स्टोर करें
-        console.log("Debug: savedSession after authentication:", savedSession ? "exists" : "null"); // <-- नया डीबग लॉग
+        console.log("Raw session object from 'authenticated' event:", session); // <-- नया डीबग लॉग
+        if (session && typeof session === 'object' && Object.keys(session).length > 0) {
+            savedSession = session; // नए/मान्य सेशन ऑब्जेक्ट को स्टोर करें
+            console.log("Debug: savedSession after authentication assigned:", savedSession ? "exists" : "null"); // <-- नया डीबग लॉग
+        } else {
+            savedSession = null;
+            console.log("Debug: 'session' object from 'authenticated' event was empty or invalid.");
+        }
+        
         qrCodeData = 'WhatsApp क्लाइंट प्रमाणित है और ऑनलाइन है!'; // वेब पेज पर स्थिति अपडेट करें
         await saveBotConfigToFirestore(); // सेशन ऑब्जेक्ट और अपडेटेड QR मैसेज को Firestore में सहेजें
-
-        // 'authenticated' पर मैसेज भेजने को हटा दिया गया है, अब यह 'ready' पर होगा
     });
 
     client.on('auth_failure', async (msg) => {
