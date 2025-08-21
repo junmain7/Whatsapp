@@ -1,7 +1,8 @@
 // app.js
 
 // आवश्यक लाइब्रेरी आयात करें
-const { Client } = require('whatsapp-web.js'); // LocalAuth अब इस्तेमाल नहीं होगा
+// LocalAuth की जगह अब सीधे Client का उपयोग किया जाएगा
+const { Client } = require('whatsapp-web.js');
 const qrcode = require('qrcode'); // QR कोड जेनरेट करने के लिए
 const express = require('express'); // एक वेब सर्वर बनाने के लिए
 // Firebase मॉड्यूल को Firestore संचालन के लिए अपडेट किया गया है
@@ -118,7 +119,7 @@ async function saveBotConfigToFirestore() {
     try {
         // सेशन ऑब्जेक्ट को JSON स्ट्रिंग के रूप में सहेजें
         // सुनिश्चित करें कि savedSession एक ऑब्जेक्ट है, अन्यथा null सेव करें
-        const sessionToSave = (typeof savedSession === 'object' && savedSession !== null)
+        const sessionToSave = (typeof savedSession === 'object' && savedSession !== null && Object.keys(savedSession).length > 0)
                                ? JSON.stringify(savedSession)
                                : null;
         console.log("Saving session to Firestore. Session exists:", !!savedSession); // <-- डीबग लॉग
@@ -329,13 +330,13 @@ function initializeWhatsappClient() {
     };
 
     // यदि कोई सेव्ड सेशन है, तो उसे उपयोग करने का प्रयास करें
-    // LocalAuth की जगह अब सीधे session ऑब्जेक्ट को पास करेंगे
+    // हमने LocalAuth को हटा दिया है, अब सीधे session ऑब्जेक्ट को पास करेंगे
+    // यदि session ऑब्जेक्ट प्रदान नहीं किया जाता है तो लाइब्रेरी स्वचालित रूप से QR मोड में वापस आ जाती है
     if (savedSession) {
         clientOptions.session = savedSession;
         console.log('सेव्ड सेशन के साथ क्लाइंट इनिशियलाइज़ करने का प्रयास कर रहे हैं...');
     } else {
         console.log('कोई सेव्ड सेशन नहीं मिला, QR कोड के लिए क्लाइंट इनिशियलाइज़ करेंगे...');
-        // यदि session ऑब्जेक्ट प्रदान नहीं किया जाता है तो लाइब्रेरी स्वचालित रूप से QR मोड में वापस आ जाती है
     }
 
     client = new Client(clientOptions);
@@ -378,12 +379,14 @@ function initializeWhatsappClient() {
     client.on('authenticated', async (session) => {
         console.log('WhatsApp क्लाइंट प्रमाणित हुआ और सेशन प्राप्त हुआ!');
         console.log("Raw session object from 'authenticated' event:", session); // <-- नया डीबग लॉग
+        
+        // session ऑब्जेक्ट की अधिक कठोर जाँच करें
         if (session && typeof session === 'object' && Object.keys(session).length > 0) {
             savedSession = session; // नए/मान्य सेशन ऑब्जेक्ट को स्टोर करें
-            console.log("Debug: savedSession after authentication assigned:", savedSession ? "exists" : "null"); // <-- नया डीबग लॉग
+            console.log("Debug: savedSession assigned after authentication. Session exists:", !!savedSession); // <-- नया डीबग लॉग
         } else {
             savedSession = null;
-            console.log("Debug: 'session' object from 'authenticated' event was empty or invalid.");
+            console.error("Error: 'session' object from 'authenticated' event was empty or invalid. This may cause disconnects.");
         }
         
         qrCodeData = 'WhatsApp क्लाइंट प्रमाणित है और ऑनलाइन है!'; // वेब पेज पर स्थिति अपडेट करें
@@ -399,6 +402,15 @@ function initializeWhatsappClient() {
             clearInterval(schedulerInterval); // शेड्यूलर को बंद करें
             console.log("शेड्यूलर बंद किया गया।");
         }
+        // प्रमाणीकरण विफलता के बाद क्लाइंट को नष्ट करने का प्रयास करें ताकि क्लीन रीस्टार्ट हो सके
+        if (client) {
+            try {
+                await client.destroy();
+                console.log("क्लाइंट नष्ट हो गया।");
+            } catch (destroyError) {
+                console.error("क्लाइंट नष्ट करने में त्रुटि:", destroyError);
+            }
+        }
     });
 
     client.on('disconnected', async (reason) => {
@@ -411,6 +423,18 @@ function initializeWhatsappClient() {
             clearInterval(schedulerInterval); // शेड्यूलर को बंद करें
             console.log("शेड्यूलर बंद किया गया।");
         }
+        // डिस्कनेक्शन के बाद क्लाइंट को नष्ट करने का प्रयास करें ताकि क्लीन रीस्टार्ट हो सके
+        if (client) {
+            try {
+                await client.destroy();
+                console.log("क्लाइंट नष्ट हो गया।");
+            } catch (destroyError) {
+                console.error("क्लाइंट नष्ट करने में त्रुटि:", destroyError);
+            }
+        }
+        // डिस्कनेक्शन के बाद पुनः इनिशियलाइज़ करने का प्रयास करें
+        console.log("WhatsApp क्लाइंट पुनः इनिशियलाइज़ कर रहे हैं...");
+        initializeWhatsappClient();
     });
 
     // WhatsApp पर मैसेज आने पर
