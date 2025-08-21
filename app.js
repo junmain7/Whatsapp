@@ -120,6 +120,7 @@ async function saveBotConfigToFirestore() {
     }
 }
 
+// IST timezone में datetime-local input लेकर UTC में कन्वर्ट करने वाला फंक्शन
 function parseScheduleDetails(data, currentSenderId) {
     let message, recipientRaw, timeString;
     if (typeof data === 'string') {
@@ -132,16 +133,31 @@ function parseScheduleDetails(data, currentSenderId) {
         recipientRaw = data.recipientNumber;
         timeString = data.scheduledTime;
     }
+
     let recipient = recipientRaw.replace(/\D/g, '');
     if (recipient.startsWith('0')) recipient = recipient.substring(1);
     if (recipient.length === 10 && !recipient.startsWith('91')) recipient = '91' + recipient;
     recipient = `${recipient}@c.us`;
 
     const now = new Date();
-    let scheduledDate = new Date();
-    if (timeString.includes('T')) {
-        scheduledDate = new Date(timeString);
+    let scheduledDate;
+
+    if (timeString.includes('T') && !timeString.endsWith('Z')) {
+        const [datePart, timePart] = timeString.split('T');
+        const [hourStr, minuteStr] = timePart.split(':');
+        const hour = parseInt(hourStr, 10);
+        const minute = parseInt(minuteStr, 10);
+
+        scheduledDate = new Date(Date.UTC(
+            parseInt(datePart.substr(0, 4), 10),
+            parseInt(datePart.substr(5, 2), 10) - 1,
+            parseInt(datePart.substr(8, 2), 10),
+            hour - 5,
+            minute - 30,
+            0, 0
+        ));
     } else {
+        scheduledDate = new Date();
         let [hours, minutes] = [0, 0];
         const timeMatch = timeString.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
         if (timeMatch) {
@@ -156,9 +172,11 @@ function parseScheduleDetails(data, currentSenderId) {
         }
         scheduledDate.setHours(hours, minutes, 0, 0);
     }
+
     if (scheduledDate.getTime() <= now.getTime()) {
         scheduledDate.setDate(scheduledDate.getDate() + 1);
     }
+
     return {
         recipient,
         message,
@@ -239,6 +257,7 @@ async function sendScheduledMessages() {
 let client;
 
 function initializeWhatsappClient() {
+    console.log("WhatsApp क्लाइंट इनिशियलाइज़ कर रहे हैं...");
     const clientOptions = {
         puppeteer: {
             args: [
@@ -246,70 +265,86 @@ function initializeWhatsappClient() {
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-accelerated-2d-canvas',
-                '--disable-gpu'
+                '--disable-gpu',
+                '--single-process',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding'
             ],
         }
     };
+
     if (savedSession) {
         clientOptions.session = savedSession;
+        console.log('सेव्ड सेशन के साथ क्लाइंट इनिशियलाइज़ करने का प्रयास कर रहे हैं...');
+    } else {
+        console.log('कोई सेव्ड सेशन नहीं मिला, QR कोड के लिए क्लाइंट इनिशियलाइज़ करेंगे...');
     }
+
     client = new Client(clientOptions);
 
     client.on('qr', async qr => {
+        console.log('QR कोड प्राप्त हुआ।');
         qrCodeData = await qrcode.toDataURL(qr);
         await saveBotConfigToFirestore();
     });
 
     client.on('ready', async () => {
         isClientReady = true;
+        console.log('WhatsApp क्लाइंट तैयार है!');
         await new Promise(resolve => setTimeout(resolve, 1000));
 
         const botOwnId = client.info?.wid?._serialized || null;
         if (botOwnId) {
             try {
                 await client.sendMessage(botOwnId, 'बॉट सफलतापूर्वक कनेक्ट हो गया है!');
+                console.log(`कनेक्शन कन्फर्मेशन मैसेज ${botOwnId} को भेजा गया।`);
             } catch (error) {
-                console.error('कनेक्शन मैसेज भेजने में एरर:', error);
+                console.error('कनेक्शन कन्फर्मेशन मैसेज भेजने में त्रुटि:', error);
             }
+        } else {
+            console.warn('client.info.wid उपलब्ध नहीं है।');
         }
 
         if (schedulerInterval) clearInterval(schedulerInterval);
-        schedulerInterval = setInterval(sendScheduledMessages, 60000);
+        schedulerInterval = setInterval(sendScheduledMessages, 60 * 1000);
     });
 
     client.on('authenticated', async session => {
+        console.log('WhatsApp क्लाइंट प्रमाणित हुआ!');
         if (session && typeof session === 'object' && Object.keys(session).length > 0) {
             savedSession = session;
+            console.log("Session saved.");
         } else {
             savedSession = null;
+            console.error("Session ऑब्जेक्ट अमान्य है।");
         }
-        qrCodeData = 'क्लाइंट प्रमाणित है और ऑनलाइन है!';
+        qrCodeData = 'WhatsApp क्लाइंट प्रमाणित है और ऑनलाइन है!';
         await saveBotConfigToFirestore();
     });
 
     client.on('auth_failure', async msg => {
-        qrCodeData = 'प्रमाणीकरण विफल। कृपया पुनः QR स्कैन करें।';
+        console.error('प्रमाणीकरण विफल:', msg);
+        qrCodeData = 'प्रमाणीकरण विफल हुआ। कृपया पुनः QR स्कैन करें।';
         savedSession = null;
         await saveBotConfigToFirestore();
         if (schedulerInterval) clearInterval(schedulerInterval);
         if (client) {
-            try {
-                await client.destroy();
-            } catch {}
+            try { await client.destroy(); } catch {}
         }
     });
 
     client.on('disconnected', async reason => {
+        console.log('WhatsApp डिस्कनेक्ट:', reason);
         savedSession = null;
-        qrCodeData = 'QR कोड स्कैन कीजिये!';
+        qrCodeData = 'QR कोड स्कैन करें।';
         await saveBotConfigToFirestore();
         isClientReady = false;
         if (schedulerInterval) clearInterval(schedulerInterval);
         if (client) {
-            try {
-                await client.destroy();
-            } catch {}
+            try { await client.destroy(); } catch {}
         }
+        console.log("WhatsApp क्लाइंट पुनः इनिशियलाइज़ कर रहे हैं...");
         initializeWhatsappClient();
     });
 
@@ -320,8 +355,7 @@ function initializeWhatsappClient() {
         const messageBody = msg.body;
 
         if (senderId !== botOwnId) {
-            // सिर्फ मालिक का मैसेज रिस्पॉन्ड करें
-            console.log(`मैसेज मालिक से नहीं आया (${senderId}), बॉट जवाब नहीं देगा।`);
+            console.log(`मैसेज मालिक से नहीं आया (${senderId}), जवाब नहीं देगा।`);
             return;
         }
 
@@ -466,18 +500,76 @@ app.get('/schedule', async (req, res) => {
         });
         messages.sort((a, b) => new Date(a.scheduledTime) - new Date(b.scheduledTime));
     }
+
     res.send(`
-    <h2>Scheduled Messages</h2>
-    <ul>
-      ${messages.map(m => `<li><b>${m.recipient}</b>: ${m.message} - <i>${m.status}</i> at ${m.scheduledTime}</li>`).join('')}
-    </ul>
-    <form method="POST" action="/schedule_message">
-      <input name="recipientNumber" placeholder="Recipient Number" required/>
-      <input name="message" placeholder="Message" required/>
-      <input name="scheduledTime" type="datetime-local" required/>
-      <button type="submit">Schedule Message</button>
-    </form>
-    <a href="/">Back</a>
+    <!DOCTYPE html>
+    <html lang="hi">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Scheduled Messages</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+    </head>
+    <body class="bg-gray-100 min-h-screen flex flex-col items-center py-8 font-sans text-gray-800">
+        <div class="bg-white shadow-lg rounded-lg p-8 w-full max-w-3xl">
+            <h1 class="text-2xl font-bold mb-6 text-center text-green-700">Scheduled Messages</h1>
+
+            <div class="overflow-x-auto max-h-96 mb-8">
+                <table class="min-w-full border border-gray-300 rounded-lg table-auto">
+                    <thead class="bg-green-100 sticky top-0">
+                        <tr>
+                            <th class="px-4 py-2 border border-gray-300 text-left">Recipient</th>
+                            <th class="px-4 py-2 border border-gray-300 text-left">Message</th>
+                            <th class="px-4 py-2 border border-gray-300 text-left">Status</th>
+                            <th class="px-4 py-2 border border-gray-300 text-left">Scheduled Time (IST)</th>
+                            <th class="px-4 py-2 border border-gray-300 text-left">Sent Time (IST)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${messages.length === 0 
+                            ? `<tr><td colspan="5" class="text-center p-4 text-gray-500">कोई शेड्यूल किया गया मैसेज नहीं मिला।</td></tr>` 
+                            : messages.map(m => `
+                                <tr class="hover:bg-green-50">
+                                    <td class="border border-gray-300 px-4 py-2">${m.recipient}</td>
+                                    <td class="border border-gray-300 px-4 py-2 break-words max-w-xs">${m.message}</td>
+                                    <td class="border border-gray-300 px-4 py-2 capitalize">${m.status}</td>
+                                    <td class="border border-gray-300 px-4 py-2">${new Date(m.scheduledTime).toLocaleString('hi-IN', { timeZone: 'Asia/Kolkata' })}</td>
+                                    <td class="border border-gray-300 px-4 py-2">${m.sentAt ? new Date(m.sentAt).toLocaleString('hi-IN', { timeZone: 'Asia/Kolkata' }) : '—'}</td>
+                                </tr>
+                            `).join('')}
+                    </tbody>
+                </table>
+            </div>
+
+            <form method="POST" action="/schedule_message" class="space-y-4 max-w-xl mx-auto">
+                <div>
+                    <label for="recipientNumber" class="block mb-1 font-medium">प्राप्तकर्ता नंबर (देश कोड सहित)</label>
+                    <input id="recipientNumber" name="recipientNumber" type="text" required placeholder="उदा: 919876543210" 
+                        class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500" />
+                </div>
+                <div>
+                    <label for="message" class="block mb-1 font-medium">मैसेज</label>
+                    <textarea id="message" name="message" rows="3" required placeholder="यहाँ मैसेज लिखें" 
+                        class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500"></textarea>
+                </div>
+                <div>
+                    <label for="scheduledTime" class="block mb-1 font-medium">शेड्यूल्ड समय</label>
+                    <input id="scheduledTime" name="scheduledTime" type="datetime-local" required 
+                        class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500" />
+                    <p class="text-sm mt-1 text-gray-600">समय भारतीय मानक समय (IST) में भरें</p>
+                </div>
+                <button type="submit" 
+                    class="w-full bg-green-600 text-white py-3 rounded hover:bg-green-700 transition font-semibold">
+                    मैसेज शेड्यूल करें
+                </button>
+            </form>
+
+            <div class="mt-6 text-center">
+                <a href="/" class="text-green-600 hover:underline font-medium">मुख्य पेज पर जाएं</a>
+            </div>
+        </div>
+    </body>
+    </html>
     `);
 });
 
