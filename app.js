@@ -1,6 +1,7 @@
 // app.js
 
 // आवश्यक लाइब्रेरी आयात करें
+// LocalAuth अब इस्तेमाल नहीं होगा, क्योंकि हम सेशन को मैन्युअल रूप से संभाल रहे हैं।
 const { Client } = require('whatsapp-web.js');
 const qrcode = require('qrcode'); // QR कोड जेनरेट करने के लिए
 const express = require('express'); // एक वेब सर्वर बनाने के लिए
@@ -13,9 +14,9 @@ const { getAuth, signInAnonymously, signInWithCustomToken } = require('firebase/
 const app = express();
 const port = process.env.PORT || 3000; // Render पोर्ट को ऑटोमेटिकली सेट करता है
 
-// JSON बॉडी को पार्स करने के लिए मिडलवेयर (फॉर्म डेटा के लिए)
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json()); // JSON बॉडी पार्स करने के लिए भी, API एंडपॉइंट के लिए
+// JSON बॉडी को पार्स करने के लिए मिडलवेयर (वेब फॉर्म और API के लिए)
+app.use(express.urlencoded({ extended: true })); // URL-encoded डेटा के लिए
+app.use(express.json()); // JSON रिक्वेस्ट बॉडी के लिए
 
 // Firebase कॉन्फ़िग और ऐप ID को Render पर्यावरण चर से प्राप्त करें
 const firebaseConfigRaw = process.env.FIREBASE_CONFIG; // Raw string को पढ़ें
@@ -201,6 +202,7 @@ function parseScheduleDetails(data, currentSenderId) {
         recipient: recipient,
         message: message,
         scheduledTime: scheduledDate.toISOString(), // ISO स्ट्रिंग के रूप में सेव करें
+        status: 'pending', // हमेशा शुरुआती स्थिति 'pending' होगी
         requesterId: currentSenderId // जिसने मैसेज शेड्यूल किया
     };
 }
@@ -330,12 +332,13 @@ function initializeWhatsappClient() {
     };
 
     // यदि कोई सेव्ड सेशन है, तो उसे उपयोग करने का प्रयास करें
+    // LocalAuth अब इस्तेमाल नहीं होगा, हम सीधे session ऑब्जेक्ट को पास करेंगे
+    // यदि session ऑब्जेक्ट प्रदान नहीं किया जाता है तो लाइब्रेरी स्वचालित रूप से QR मोड में वापस आ जाती है
     if (savedSession) {
         clientOptions.session = savedSession;
         console.log('सेव्ड सेशन के साथ क्लाइंट इनिशियलाइज़ करने का प्रयास कर रहे हैं...');
     } else {
         console.log('कोई सेव्ड सेशन नहीं मिला, QR कोड के लिए क्लाइंट इनिशियलाइज़ करेंगे...');
-        // LocalAuth अब इस्तेमाल नहीं होगा
     }
 
     client = new Client(clientOptions);
@@ -455,11 +458,11 @@ function initializeWhatsappClient() {
 
             // शेड्यूल मैसेज कमांड को हैंडल करें
             if (lowerCaseMessage.startsWith('send ')) {
-                const scheduleDetails = parseScheduleDetails(messageBody, senderId); // अब नया नाम
+                const scheduleDetails = parseScheduleDetails(messageBody, senderId); // WhatsApp कमांड के लिए parseScheduleDetails का उपयोग करें
                 if (scheduleDetails) {
                     const success = await scheduleMessageInFirestore(scheduleDetails);
                     if (success) {
-                        await client.sendMessage(senderId, `मैसेज "${scheduleDetails.message}" को ${scheduleDetails.recipient} पर ${new Date(scheduleDetails.scheduledTime).toLocaleString()} पर भेजने के लिए शेड्यूल किया गया है।`);
+                        await client.sendMessage(senderId, `मैसेज "${scheduleDetails.message}" को ${scheduleDetails.recipient.split('@')[0]} पर ${new Date(scheduleDetails.scheduledTime).toLocaleString()} पर भेजने के लिए शेड्यूल किया गया है।`);
                     } else {
                         await client.sendMessage(senderId, 'शेड्यूल किया गया मैसेज सेव करने में त्रुटि हुई।');
                     }
@@ -724,8 +727,9 @@ app.post('/schedule_message', async (req, res) => {
     }
 
     const botOwnId = client.info?.wid?._serialized || userId;
+    // parseScheduleDetails अब सीधे ऑब्जेक्ट एक्सपेक्ट करता है
     const scheduleDetails = parseScheduleDetails(
-        { recipientNumber, message, scheduledTime }, // ऑब्जेक्ट के रूप में पास करें
+        { recipientNumber, message, scheduledTime },
         botOwnId
     );
 
@@ -790,7 +794,15 @@ app.get('/api/scheduled-messages', async (req, res) => {
         const querySnapshot = await getDocs(scheduledMessagesRef);
         const messages = [];
         querySnapshot.forEach(doc => {
-            messages.push({ id: doc.id, ...doc.data() });
+            // Firestore Timestamp को JavaScript Date में बदलें
+            const data = doc.data();
+            if (data.createdAt instanceof Timestamp) {
+                data.createdAt = data.createdAt.toDate().toISOString();
+            }
+            if (data.sentAt instanceof Timestamp) {
+                data.sentAt = data.sentAt.toDate().toISOString();
+            }
+            messages.push({ id: doc.id, ...data });
         });
         // क्लाइंट-साइड पर क्रमबद्ध करें (उदाहरण के लिए, शेड्यूल किए गए समय के अनुसार)
         messages.sort((a, b) => new Date(a.scheduledTime) - new Date(b.scheduledTime));
