@@ -458,7 +458,8 @@ function initializeWhatsappClient() {
 
             // शेड्यूल मैसेज कमांड को हैंडल करें
             if (lowerCaseMessage.startsWith('send ')) {
-                const scheduleDetails = parseScheduleDetails(messageBody, senderId); // WhatsApp कमांड के लिए parseScheduleDetails का उपयोग करें
+                // WhatsApp कमांड के लिए parseScheduleDetails का उपयोग करें (स्ट्रिंग के रूप में)
+                const scheduleDetails = parseScheduleDetails(messageBody, senderId);
                 if (scheduleDetails) {
                     const success = await scheduleMessageInFirestore(scheduleDetails);
                     if (success) {
@@ -490,7 +491,7 @@ function initializeWhatsappClient() {
                     await saveBotConfigToFirestore();
                     // मालिक को स्पष्ट रूप से बताएं कि बॉट अब अन्य यूज़र्स को जवाब नहीं देगा।
                     await client.sendMessage(senderId, 'आपकी स्थिति अब: ऑफ़लाइन। बॉट अब किसी भी यूज़र को जवाब नहीं देगा, सिवाय आपके निर्देशों का पालन करने और शेड्यूल किए गए मैसेजेस भेजने के के।');
-                    console.log("मालिक ने अपनी स्थिति ऑफलाइन पर सेट की।");
+                    console.log("मा मालिक ने अपनी स्थिति ऑफलाइन पर सेट की।");
                 } else {
                     await client.sendMessage(senderId, 'आप पहले से ही ऑफ़लाइन हैं।');
                 }
@@ -700,7 +701,7 @@ app.get('/', async (req, res) => {
                     <p class="text-lg text-gray-700 mb-6">कृपया अपने फ़ोन से WhatsApp खोलें, <b>Linked Devices</b> पर जाएं, और इस QR कोड को स्कैन करें।</p>
                     <img src="${qrCodeData}" alt="QR Code" class="mx-auto border-2 border-black p-4 rounded-lg shadow-md max-w-[80%] h-auto"/>
                     <p class="text-sm text-gray-500 mt-6">यदि QR कोड लोड नहीं हो रहा है, तो कृपया Render लॉग्स देखें और कुछ मिनट प्रतीक्षा करें। यह QR कोड Firestore में भी सहेजा गया है।</p>
-                    <p class="text-xs text-red-500 mt-2">ध्यान दें: यह बॉट whatsapp-web.js लाइब्रेरी का उपयोग करता है जो QR कोड का उपयोग करता है, पेयरिंग कोड का नहीं।</p>
+                    <p class="text-xs text-red-500 mt-2">ध्यान दें: यह बॉट whatsapp-web.js लाइब्रेरी का उपयोग करता है जो QR कोड का उपयोग करता है, पेयरिंग कोड का नहीं है।</p>
                     <p class="text-xs text-gray-500 mt-2">यह ऐप अब Firebase से सेशन को लोड करने की कोशिश करेगा, ताकि आपको बार-बार QR स्कैन न करना पड़े।</p>
                 </div>
             </body>
