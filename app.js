@@ -1,7 +1,6 @@
 // app.js
 
 // आवश्यक लाइब्रेरी आयात करें
-// LocalAuth की जगह अब सीधे Client का उपयोग किया जाएगा
 const { Client } = require('whatsapp-web.js');
 const qrcode = require('qrcode'); // QR कोड जेनरेट करने के लिए
 const express = require('express'); // एक वेब सर्वर बनाने के लिए
@@ -16,6 +15,7 @@ const port = process.env.PORT || 3000; // Render पोर्ट को ऑट�
 
 // JSON बॉडी को पार्स करने के लिए मिडलवेयर (फॉर्म डेटा के लिए)
 app.use(express.urlencoded({ extended: true }));
+app.use(express.json()); // JSON बॉडी पार्स करने के लिए भी, API एंडपॉइंट के लिए
 
 // Firebase कॉन्फ़िग और ऐप ID को Render पर्यावरण चर से प्राप्त करें
 const firebaseConfigRaw = process.env.FIREBASE_CONFIG; // Raw string को पढ़ें
@@ -135,18 +135,21 @@ async function saveBotConfigToFirestore() {
     }
 }
 
-// एक सहायक फ़ंक्शन जो शेड्यूल कमांड को पार्स करता है
-function parseScheduleCommand(messageBody, currentSenderId) {
-    // उदाहरण: "send Hi to 9365374458 at 12:00am"
-    // Regex को थोड़ा और मजबूत किया गया है ताकि समय में स्पेस के साथ 'am'/'pm' को भी हैंडल किया जा सके
-    const regex = /^send\s+(.+)\s+to\s+([0-9+]+)\s+at\s+([0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)?)$/i;
-    const match = messageBody.match(regex);
+// एक सहायक फ़ंक्शन जो शेड्यूल कमांड को पार्स करता है (अब वेब फॉर्म और कमांड दोनों के लिए)
+function parseScheduleDetails(data, currentSenderId) {
+    let message, recipientRaw, timeString;
 
-    if (!match) {
-        return null; // कमांड फॉर्मेट से मेल नहीं खाता
+    // यदि डेटा एक स्ट्रिंग है (WhatsApp कमांड)
+    if (typeof data === 'string') {
+        const regex = /^send\s+(.+)\s+to\s+([0-9+]+)\s+at\s+([0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)?)$/i;
+        const match = data.match(regex);
+        if (!match) return null;
+        [, message, recipientRaw, timeString] = match;
+    } else { // यदि डेटा एक ऑब्जेक्ट है (वेब फॉर्म से)
+        message = data.message;
+        recipientRaw = data.recipientNumber;
+        timeString = data.scheduledTime; // datetime-local से ISO स्ट्रिंग या HH:MM AM/PM
     }
-
-    let [, message, recipientRaw, timeString] = match;
 
     // Recipient number cleanup and WhatsApp ID format
     let recipient = recipientRaw.replace(/\D/g, ''); // केवल अंक रखें
@@ -161,34 +164,30 @@ function parseScheduleCommand(messageBody, currentSenderId) {
 
     // Parse time
     const now = new Date();
-    let scheduledDate = new Date(now); // वर्तमान तारीख के साथ शुरू करें
+    let scheduledDate = new Date(); // वर्तमान तारीख/समय से शुरू करें
 
-    // 'at' के बाद समय को पार्स करें
-    let [hours, minutes] = [0, 0];
-    const timeMatch = timeString.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
-    if (timeMatch) {
-        hours = parseInt(timeMatch[1], 10);
-        minutes = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
-        const ampm = timeMatch[3]?.toLowerCase();
+    // datetime-local इनपुट से ISO स्ट्रिंग को सीधे पार्स करें
+    if (timeString.includes('T')) { // "YYYY-MM-DDTHH:MM" फॉर्मेट
+        scheduledDate = new Date(timeString);
+    } else { // "HH:MM AM/PM" या "HH:MM" फॉर्मेट
+        let [hours, minutes] = [0, 0];
+        const timeMatch = timeString.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+        if (timeMatch) {
+            hours = parseInt(timeMatch[1], 10);
+            minutes = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+            const ampm = timeMatch[3]?.toLowerCase();
 
-        if (ampm === 'pm' && hours !== 12) {
-            hours += 12;
-        } else if (ampm === 'am' && hours === 12) { // 12 AM (midnight) is 00 hours
-            hours = 0;
-        }
-    } else {
-        // Fallback for simple military time or unrecognized format, try to parse directly
-        const simpleTimeMatch = timeString.match(/(\d{1,2})(?::(\d{2}))?/);
-        if (simpleTimeMatch) {
-            hours = parseInt(simpleTimeMatch[1], 10);
-            minutes = simpleTimeMatch[2] ? parseInt(simpleTimeMatch[2], 10) : 0;
+            if (ampm === 'pm' && hours !== 12) {
+                hours += 12;
+            } else if (ampm === 'am' && hours === 12) { // 12 AM (midnight) is 00 hours
+                hours = 0;
+            }
         } else {
             console.warn("Could not parse time string:", timeString);
             return null; // Invalid time format
         }
+        scheduledDate.setHours(hours, minutes, 0, 0); // सेकंड और मिलीसेकंड को 0 पर सेट करें
     }
-
-    scheduledDate.setHours(hours, minutes, 0, 0); // सेकंड और मिलीसेकंड को 0 पर सेट करें
 
     // यदि शेड्यूल किया गया समय वर्तमान समय से पहले है, तो उसे अगले दिन के लिए सेट करें
     // यह सुनिश्चित करता है कि मैसेज हमेशा भविष्य में शेड्यूल हो
@@ -205,6 +204,7 @@ function parseScheduleCommand(messageBody, currentSenderId) {
         requesterId: currentSenderId // जिसने मैसेज शेड्यूल किया
     };
 }
+
 
 // Firestore में शेड्यूल किए गए मैसेज को सेव करें
 async function scheduleMessageInFirestore(scheduleDetails) {
@@ -330,13 +330,12 @@ function initializeWhatsappClient() {
     };
 
     // यदि कोई सेव्ड सेशन है, तो उसे उपयोग करने का प्रयास करें
-    // हमने LocalAuth को हटा दिया है, अब सीधे session ऑब्जेक्ट को पास करेंगे
-    // यदि session ऑब्जेक्ट प्रदान नहीं किया जाता है तो लाइब्रेरी स्वचालित रूप से QR मोड में वापस आ जाती है
     if (savedSession) {
         clientOptions.session = savedSession;
         console.log('सेव्ड सेशन के साथ क्लाइंट इनिशियलाइज़ करने का प्रयास कर रहे हैं...');
     } else {
         console.log('कोई सेव्ड सेशन नहीं मिला, QR कोड के लिए क्लाइंट इनिशियलाइज़ करेंगे...');
+        // LocalAuth अब इस्तेमाल नहीं होगा
     }
 
     client = new Client(clientOptions);
@@ -456,7 +455,7 @@ function initializeWhatsappClient() {
 
             // शेड्यूल मैसेज कमांड को हैंडल करें
             if (lowerCaseMessage.startsWith('send ')) {
-                const scheduleDetails = parseScheduleCommand(messageBody, senderId);
+                const scheduleDetails = parseScheduleDetails(messageBody, senderId); // अब नया नाम
                 if (scheduleDetails) {
                     const success = await scheduleMessageInFirestore(scheduleDetails);
                     if (success) {
@@ -666,27 +665,9 @@ app.get('/', async (req, res) => {
                         <a href="/logout" class="block bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-6 rounded-lg transition duration-300 ease-in-out transform hover:scale-105 shadow-md glow-button">
                             WhatsApp सेशन लॉगआउट करें
                         </a>
-                    </div>
-
-                    <div class="mt-8 pt-6 border-t border-gray-200">
-                        <h2 class="text-2xl font-bold text-indigo-600 mb-4">शेड्यूल मैसेज</h2>
-                        <form action="/schedule_message" method="POST" class="space-y-4">
-                            <div>
-                                <label for="recipientNumber" class="block text-left text-sm font-medium text-gray-700 mb-1">प्राप्तकर्ता नंबर (देश कोड के साथ, उदा: 919365374458):</label>
-                                <input type="text" id="recipientNumber" name="recipientNumber" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="उदा: 919365374458" required>
-                            </div>
-                            <div>
-                                <label for="message" class="block text-left text-sm font-medium text-gray-700 mb-1">मैसेज:</label>
-                                <textarea id="message" name="message" rows="3" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="आपका मैसेज यहाँ लिखें" required></textarea>
-                            </div>
-                            <div>
-                                <label for="scheduledTime" class="block text-left text-sm font-medium text-gray-700 mb-1">समय (आज या कल के लिए, HH:MM AM/PM):</label>
-                                <input type="text" id="scheduledTime" name="scheduledTime" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="उदा: 10:30 PM या 8:00 AM" required>
-                            </div>
-                            <button type="submit" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg transition duration-300 ease-in-out transform hover:scale-105 shadow-md glow-button">
-                                मैसेज शेड्यूल करें
-                            </button>
-                        </form>
+                        <a href="/schedule" class="block bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg transition duration-300 ease-in-out transform hover:scale-105 shadow-md glow-button">
+                            शेड्यूल मैसेज देखें / सेट करें
+                        </a>
                     </div>
 
                     <p class="text-xs text-gray-500 mt-4">यह आपकी स्थिति और सेशन को Firestore में सहेजेगा ताकि यह स्थायी रहे।</p>
@@ -732,34 +713,31 @@ app.get('/ping', (req, res) => {
 // नया मार्ग जो शेड्यूल किए गए मैसेज फॉर्म को हैंडल करता है (POST अनुरोध)
 app.post('/schedule_message', async (req, res) => {
     if (!db || !userId) {
-        return res.status(500).send("Firebase इनिशियलाइज़ नहीं हुआ या यूजर ID उपलब्ध नहीं।");
+        return res.status(500).json({ success: false, message: "Firebase इनिशियलाइज़ नहीं हुआ या यूजर ID उपलब्ध नहीं।" });
     }
 
     // फॉर्म से प्राप्त डेटा
     const { recipientNumber, message, scheduledTime } = req.body;
 
     if (!recipientNumber || !message || !scheduledTime) {
-        return res.status(400).send("कृपया सभी आवश्यक फ़ील्ड भरें।");
+        return res.status(400).json({ success: false, message: "कृपया सभी आवश्यक फ़ील्ड भरें।" });
     }
 
-    // `parseScheduleCommand` का उपयोग करके वेब फॉर्म से प्राप्त डेटा को प्रोसेस करें
-    // यहां `currentSenderId` के लिए `client.info?.wid?._serialized` का उपयोग करें
-    // यह दर्शाता है कि अनुरोध बॉट के स्वयं के उपयोगकर्ता द्वारा किया गया है
-    const botOwnId = client.info?.wid?._serialized || userId; // अगर क्लाइंट तैयार नहीं है तो userId का उपयोग करें
-    const scheduleDetails = parseScheduleCommand(
-        `send ${message} to ${recipientNumber} at ${scheduledTime}`,
-        botOwnId // requesterId के रूप में बॉट का अपना ID सेट करें
+    const botOwnId = client.info?.wid?._serialized || userId;
+    const scheduleDetails = parseScheduleDetails(
+        { recipientNumber, message, scheduledTime }, // ऑब्जेक्ट के रूप में पास करें
+        botOwnId
     );
 
     if (scheduleDetails) {
         const success = await scheduleMessageInFirestore(scheduleDetails);
         if (success) {
-            res.redirect('/?scheduled=true'); // सफलता पर मुख्य पेज पर रीडायरेक्ट करें
+            return res.json({ success: true, message: "मैसेज सफलतापूर्वक शेड्यूल किया गया!" });
         } else {
-            res.status(500).send('शेड्यूल किया गया मैसेज सेव करने में त्रुटि हुई।');
+            return res.status(500).json({ success: false, message: "शेड्यूल किया गया मैसेज सेव करने में त्रुटि हुई।" });
         }
     } else {
-        res.status(400).send('अवैध नंबर या समय फॉर्मेट। कृपया सुनिश्चित करें कि नंबर देश कोड के साथ है और समय HH:MM AM/PM फॉर्मेट में है।');
+        return res.status(400).json({ success: false, message: "अवैध नंबर या समय फॉर्मेट। कृपया सुनिश्चित करें कि नंबर देश कोड के साथ है और समय सही फॉर्मेट में है।" });
     }
 });
 
@@ -799,6 +777,245 @@ app.get('/logout', async (req, res) => {
     } else {
         res.status(400).send('WhatsApp क्लाइंट तैयार नहीं है या पहले से लॉगआउट है।');
     }
+});
+
+// API एंडपॉइंट: Firestore से शेड्यूल किए गए मैसेजेस प्राप्त करें
+app.get('/api/scheduled-messages', async (req, res) => {
+    if (!db || !userId) {
+        return res.status(500).json({ error: "Firebase इनिशियलाइज़ नहीं हुआ या यूजर ID उपलब्ध नहीं।" });
+    }
+    try {
+        const scheduledMessagesRef = collection(db, `artifacts/${appId}/users/${userId}/scheduledMessages`);
+        // नोट: orderBy का उपयोग नहीं किया गया है ताकि Firestore index creation से बचा जा सके
+        const querySnapshot = await getDocs(scheduledMessagesRef);
+        const messages = [];
+        querySnapshot.forEach(doc => {
+            messages.push({ id: doc.id, ...doc.data() });
+        });
+        // क्लाइंट-साइड पर क्रमबद्ध करें (उदाहरण के लिए, शेड्यूल किए गए समय के अनुसार)
+        messages.sort((a, b) => new Date(a.scheduledTime) - new Date(b.scheduledTime));
+        res.json(messages);
+    } catch (error) {
+        console.error("शेड्यूल किए गए मैसेजेस प्राप्त करने में त्रुटि:", error);
+        res.status(500).json({ error: "शेड्यूल किए गए मैसेजेस प्राप्त करने में त्रुटि हुई।" });
+    }
+});
+
+// नया मार्ग: शेड्यूल मैसेज पेज
+app.get('/schedule', async (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html lang="hi">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>शेड्यूल मैसेज</title>
+            <script src="https://cdn.tailwindcss.com"></script>
+            <style>
+                body { font-family: 'Inter', sans-serif; }
+                .modal {
+                    display: none; /* डिफ़ॉल्ट रूप से छिपा हुआ */
+                    position: fixed; /* स्क्रीन पर रखा गया */
+                    z-index: 1000; /* अन्य तत्वों के ऊपर */
+                    left: 0;
+                    top: 0;
+                    width: 100%; /* पूरी चौड़ाई */
+                    height: 100%; /* पूरी ऊंचाई */
+                    overflow: auto; /* यदि आवश्यक हो तो स्क्रॉल सक्षम करें */
+                    background-color: rgba(0,0,0,0.7); /* आंशिक रूप से पारदर्शी काला */
+                    justify-content: center;
+                    align-items: center;
+                }
+                .modal-content {
+                    background-color: #fefefe;
+                    margin: auto;
+                    padding: 20px;
+                    border-radius: 8px;
+                    width: 90%;
+                    max-width: 500px;
+                    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                    position: relative;
+                }
+                .close-button {
+                    color: #aaa;
+                    float: right;
+                    font-size: 28px;
+                    font-weight: bold;
+                }
+                .close-button:hover,
+                .close-button:focus {
+                    color: black;
+                    text-decoration: none;
+                    cursor: pointer;
+                }
+            </style>
+        </head>
+        <body class="bg-gray-100 flex flex-col items-center justify-center min-h-screen text-gray-800 p-4">
+            <div class="bg-white rounded-lg shadow-xl p-8 max-w-2xl w-full text-center mb-8">
+                <h1 class="text-3xl font-bold text-indigo-600 mb-4">शेड्यूल किए गए मैसेज</h1>
+                <p class="text-gray-600 mb-6">यहाँ आपके सभी शेड्यूल किए गए WhatsApp मैसेजेस हैं।</p>
+                <button id="openModalBtn" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-lg transition duration-300 ease-in-out transform hover:scale-105 shadow-md mb-6">
+                    नया मैसेज शेड्यूल करें
+                </button>
+                <div id="scheduledMessagesList" class="space-y-4 text-left">
+                    <!-- मैसेजेस यहाँ लोड होंगे -->
+                    <p class="text-gray-500">शेड्यूल किए गए मैसेजेस लोड हो रहे हैं...</p>
+                </div>
+            </div>
+
+            <!-- शेड्यूल मैसेज पॉपअप/मोडल -->
+            <div id="scheduleModal" class="modal">
+                <div class="modal-content">
+                    <span class="close-button" id="closeModalBtn">&times;</span>
+                    <h2 class="text-2xl font-bold text-indigo-600 mb-4">नया मैसेज शेड्यूल करें</h2>
+                    <form id="scheduleForm" class="space-y-4">
+                        <div>
+                            <label for="recipientNumber" class="block text-left text-sm font-medium text-gray-700 mb-1">प्राप्तकर्ता नंबर (देश कोड के साथ, उदा: 919365374458):</label>
+                            <input type="text" id="recipientNumber" name="recipientNumber" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="उदा: 919365374458" required>
+                        </div>
+                        <div>
+                            <label for="message" class="block text-left text-sm font-medium text-gray-700 mb-1">मैसेज:</label>
+                            <textarea id="message" name="message" rows="3" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="आपका मैसेज यहाँ लिखें" required></textarea>
+                        </div>
+                        <div>
+                            <label for="scheduledDateTime" class="block text-left text-sm font-medium text-gray-700 mb-1">तारीख और समय:</label>
+                            <input type="datetime-local" id="scheduledDateTime" name="scheduledTime" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" required>
+                        </div>
+                        <button type="submit" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg transition duration-300 ease-in-out transform hover:scale-105 shadow-md">
+                            शेड्यूल करें
+                        </button>
+                    </form>
+                    <div id="formMessage" class="mt-4 text-sm text-center"></div>
+                </div>
+            </div>
+
+            <script>
+                const messagesList = document.getElementById('scheduledMessagesList');
+                const scheduleModal = document.getElementById('scheduleModal');
+                const openModalBtn = document.getElementById('openModalBtn');
+                const closeModalBtn = document.getElementById('closeModalBtn');
+                const scheduleForm = document.getElementById('scheduleForm');
+                const formMessage = document.getElementById('formMessage');
+
+                // मोडल खोलें
+                openModalBtn.onclick = function() {
+                    scheduleModal.style.display = 'flex';
+                    formMessage.textContent = ''; // संदेश साफ़ करें
+                    scheduleForm.reset(); // फॉर्म रीसेट करें
+                    // वर्तमान तारीख और समय सेट करें
+                    const now = new Date();
+                    now.setMinutes(now.getMinutes() + 5); // 5 मिनट आगे सेट करें
+                    const year = now.getFullYear();
+                    const month = (now.getMonth() + 1).toString().padStart(2, '0');
+                    const day = now.getDate().toString().padStart(2, '0');
+                    const hours = now.getHours().toString().padStart(2, '0');
+                    const minutes = now.getMinutes().toString().padStart(2, '0');
+                    document.getElementById('scheduledDateTime').value = `${year}-${month}-${day}T${hours}:${minutes}`;
+                }
+
+                // मोडल बंद करें
+                closeModalBtn.onclick = function() {
+                    scheduleModal.style.display = 'none';
+                }
+
+                // मोडल के बाहर क्लिक करने पर बंद करें
+                window.onclick = function(event) {
+                    if (event.target == scheduleModal) {
+                        scheduleModal.style.display = 'none';
+                    }
+                }
+
+                // मैसेजेस लोड करें
+                async function loadScheduledMessages() {
+                    messagesList.innerHTML = '<p class="text-gray-500">मैसेजेस लोड हो रहे हैं...</p>';
+                    try {
+                        const response = await fetch('/api/scheduled-messages');
+                        const messages = await response.json();
+                        
+                        if (messages.length === 0) {
+                            messagesList.innerHTML = '<p class="text-gray-500">कोई शेड्यूल किया गया मैसेज नहीं है।</p>';
+                            return;
+                        }
+
+                        messagesList.innerHTML = ''; // मौजूदा सामग्री साफ़ करें
+                        messages.forEach(msg => {
+                            const scheduledDate = new Date(msg.scheduledTime);
+                            const now = new Date();
+                            // स्टेटस के लिए रंग निर्धारित करें
+                            let statusClass = '';
+                            let displayStatus = msg.status;
+                            if (msg.status === 'sent') {
+                                statusClass = 'text-green-600';
+                            } else if (msg.status === 'failed') {
+                                statusClass = 'text-red-600';
+                            } else if (msg.status === 'pending' && scheduledDate < now) {
+                                statusClass = 'text-orange-500'; // यदि लंबित है लेकिन समय बीत चुका है
+                                displayStatus = 'देरी';
+                            } else {
+                                statusClass = 'text-blue-600'; // लंबित
+                            }
+
+                            const messageDiv = document.createElement('div');
+                            messageDiv.className = 'bg-gray-50 p-4 rounded-lg shadow-sm border border-gray-200';
+                            messageDiv.innerHTML = `
+                                <p class="font-semibold text-lg">${msg.message}</p>
+                                <p class="text-sm text-gray-700">को भेजें: <span class="font-medium">${msg.recipient.split('@')[0]}</span></p>
+                                <p class="text-sm text-gray-700">समय: <span class="font-medium">${scheduledDate.toLocaleString()}</span></p>
+                                <p class="text-sm">स्थिति: <span class="font-bold ${statusClass}">${displayStatus.toUpperCase()}</span></p>
+                            `;
+                            messagesList.appendChild(messageDiv);
+                        });
+                    } catch (error) {
+                        console.error("शेड्यूल किए गए मैसेजेस लोड करने में त्रुटि:", error);
+                        messagesList.innerHTML = '<p class="text-red-500">मैसेजेस लोड करने में त्रुटि हुई।</p>';
+                    }
+                }
+
+                // फॉर्म सबमिशन हैंडल करें
+                scheduleForm.addEventListener('submit', async function(event) {
+                    event.preventDefault();
+                    
+                    formMessage.textContent = 'मैसेज शेड्यूल कर रहे हैं...';
+                    formMessage.className = 'mt-4 text-sm text-center text-blue-500';
+
+                    const formData = new FormData(scheduleForm);
+                    const data = Object.fromEntries(formData.entries());
+
+                    try {
+                        const response = await fetch('/schedule_message', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify(data)
+                        });
+                        const result = await response.json();
+
+                        if (result.success) {
+                            formMessage.textContent = result.message;
+                            formMessage.className = 'mt-4 text-sm text-center text-green-500';
+                            scheduleForm.reset(); // फॉर्म रीसेट करें
+                            loadScheduledMessages(); // मैसेजेस की सूची रीलोड करें
+                            setTimeout(() => {
+                                scheduleModal.style.display = 'none'; // मोडल बंद करें
+                            }, 1500);
+                        } else {
+                            formMessage.textContent = result.message;
+                            formMessage.className = 'mt-4 text-sm text-center text-red-500';
+                        }
+                    } catch (error) {
+                        console.error("शेड्यूल करने का अनुरोध भेजने में त्रुटि:", error);
+                        formMessage.textContent = 'मैसेज शेड्यूल करने में नेटवर्क त्रुटि हुई।';
+                        formMessage.className = 'mt-4 text-sm text-center text-red-500';
+                    }
+                });
+
+                // पेज लोड होने पर मैसेजेस लोड करें
+                document.addEventListener('DOMContentLoaded', loadScheduledMessages);
+            </script>
+        </body>
+        </html>
+    `);
 });
 
 
